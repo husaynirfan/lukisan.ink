@@ -83,7 +83,7 @@ export const GuestLogoGenerator: React.FC = () => {
   const [selectedCategory, setSelectedCategory] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
   const [isRefining, setIsRefining] = useState(false);
-  const [isTransferring, setIsTransferring] = useState(false); // Add this line
+  const [isTransferring, setIsTransferring] = useState(false);
   const [generatedLogo, setGeneratedLogo] = useState<GeneratedLogo | null>(null);
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [pendingDownload, setPendingDownload] = useState<GeneratedLogo | null>(null);
@@ -95,6 +95,7 @@ export const GuestLogoGenerator: React.FC = () => {
 
   // Initialize the ref to track previous user state
   const prevUserRef = useRef(user);
+  const transferAttemptedRef = useRef(false);
 
   // Get the selected category's placeholder
   const selectedCategoryData = categories.find(cat => cat.id === selectedCategory);
@@ -218,6 +219,7 @@ export const GuestLogoGenerator: React.FC = () => {
 
       // Store as temporary image for guest users
       if (!user) {
+        console.log('Storing temporary image for guest user...');
         const storeResult = await storeTempImage({
           imageUrl: logoUrl,
           prompt: prompt,
@@ -227,7 +229,9 @@ export const GuestLogoGenerator: React.FC = () => {
 
         if (storeResult.success && storeResult.tempImage) {
           newLogo.tempImageId = storeResult.tempImage.id;
-          console.log('Stored temporary image:', storeResult.tempImage.id);
+          console.log('Successfully stored temporary image:', storeResult.tempImage.id);
+        } else {
+          console.warn('Failed to store temporary image:', storeResult.error);
         }
       }
 
@@ -305,109 +309,131 @@ export const GuestLogoGenerator: React.FC = () => {
     }
   };
   
-// New useEffect for transfer logic
- // Update the useEffect hook to use isTransferring
-useEffect(() => {
-  const prevUser = prevUserRef.current;
+  // Enhanced useEffect for transfer logic with better error handling
+  useEffect(() => {
+    const prevUser = prevUserRef.current;
 
-  // Detect login: guest (no prevUser) to logged-in user (current user exists)
-  if (!prevUser && user) {
-    console.log('Login detected! Initiating transfer of guest images for user ID:', user.id);
-    setIsTransferring(true);
-    const loadingToast = toast.loading('Authentication successful! Transferring your logos...');
+    // Detect login: guest (no prevUser) to logged-in user (current user exists)
+    if (!prevUser && user && !transferAttemptedRef.current) {
+      console.log('=== LOGIN DETECTED ===');
+      console.log('Previous user:', prevUser);
+      console.log('Current user:', user.id);
+      console.log('Transfer attempted before:', transferAttemptedRef.current);
+      
+      // Mark that we're attempting transfer to prevent multiple attempts
+      transferAttemptedRef.current = true;
+      
+      setIsTransferring(true);
+      const loadingToast = toast.loading('Authentication successful! Transferring your logos...');
 
-    // Add a small delay to ensure auth state is fully updated
-    const transferTimer = setTimeout(async () => {
-      try {
-        const transferResult = await transferTempImagesToUser(user.id);
-        console.log('Transfer result:', transferResult);
-        
-        toast.dismiss(loadingToast);
-        setIsTransferring(false);
-
-        if (transferResult.insufficientCredits) {
-          toast.error(`Not enough credits. Need ${transferResult.creditsNeeded}, have ${transferResult.creditsAvailable}`, {
-            icon: '💳',
-            duration: 5000,
-          });
-          if (generatedLogo) {
-            setGeneratedLogo(prev => prev ? { ...prev, hasInsufficientCredits: true } : null);
+      // Add a small delay to ensure auth state is fully updated
+      const transferTimer = setTimeout(async () => {
+        try {
+          console.log('Starting transfer process...');
+          
+          // First, let's check what guest images we have
+          const guestImages = await getTempImages();
+          console.log('Found guest images:', guestImages.length);
+          
+          if (guestImages.length === 0) {
+            console.log('No guest images to transfer');
+            toast.dismiss(loadingToast);
+            setIsTransferring(false);
+            return;
           }
-        } else if (transferResult.success) {
-          if (transferResult.transferredCount > 0) {
+
+          const transferResult = await transferTempImagesToUser(user.id);
+          console.log('Transfer result:', transferResult);
+          
+          toast.dismiss(loadingToast);
+          setIsTransferring(false);
+
+          if (transferResult.insufficientCredits) {
+            toast.error(`Not enough credits. Need ${transferResult.creditsNeeded}, have ${transferResult.creditsAvailable}`, {
+              icon: '💳',
+              duration: 5000,
+            });
+            if (generatedLogo) {
+              setGeneratedLogo(prev => prev ? { ...prev, hasInsufficientCredits: true } : null);
+            }
+          } else if (transferResult.success && transferResult.transferredCount > 0) {
             toast.success(`Successfully transferred ${transferResult.transferredCount} logo(s) to your library!`, {
               icon: '✅',
               duration: 4000,
             });
-            cleanupAllGuestImages(); 
+            
+            // Refresh user data to update credits
+            refetchUser();
+            
+            // Handle pending download if any
+            if (pendingDownload && !transferResult.insufficientCredits) {
+              console.log('Processing pending download...');
+              setTimeout(() => {
+                handleDownload(pendingDownload);
+                setPendingDownload(null);
+              }, 1000);
+            }
+          } else if (transferResult.success && transferResult.transferredCount === 0) {
+            console.log('Transfer completed but no images were transferred');
+            toast.info('No new logos to transfer to your library');
           }
 
-          // Handle pending download if any
-          if (pendingDownload && !transferResult.insufficientCredits) {
-            handleDownload(pendingDownload);
-            setPendingDownload(null);
+          // Log any errors
+          if (transferResult.errors.length > 0) {
+            console.error('Transfer errors:', transferResult.errors);
+            if (!transferResult.success) {
+              toast.error(`Transfer failed: ${transferResult.errors[0]}`, {
+                icon: '⚠️',
+                duration: 5000,
+              });
+            }
           }
-        }
-
-        // Log any errors
-        if (transferResult.errors.length > 0) {
-          console.error('Transfer errors:', transferResult.errors);
-          if (!transferResult.success) {
-            toast.error(`Transfer completed with errors: ${transferResult.errors.join(', ')}`, {
-              icon: '⚠️',
-              duration: 5000,
-            });
-          }
-        }
-      } catch (error: any) {
-        console.error('Error during image transfer:', error);
-        setIsTransferring(false);
-        toast.dismiss(loadingToast);
-        
-        // Handle auth errors specifically
-        if (error.status === 400 && error.message.includes('Refresh Token')) {
-          console.log('Auth token expired, refreshing session...');
-          // Try to refresh the session
-          const { data, error: refreshError } = await supabase.auth.refreshSession();
-          if (refreshError) {
-            console.error('Error refreshing session:', refreshError);
-            toast.error('Session expired. Please sign in again.', {
+          
+        } catch (error: any) {
+          console.error('=== TRANSFER ERROR ===');
+          console.error('Error during image transfer:', error);
+          setIsTransferring(false);
+          toast.dismiss(loadingToast);
+          
+          // Handle auth errors specifically
+          if (error.message && error.message.includes('Authentication')) {
+            console.log('Auth error detected, user may need to sign in again');
+            toast.error('Authentication expired. Please sign in again.', {
               icon: '🔑',
               duration: 5000,
             });
           } else {
-            // Retry the transfer after refresh
-            console.log('Session refreshed, retrying transfer...');
-            const retryResult = await transferTempImagesToUser(user.id);
-            // Handle retry result...
+            toast.error(`Failed to transfer images: ${error.message || 'Unknown error'}`, {
+              icon: '❌',
+              duration: 5000,
+            });
           }
-        } else {
-          toast.error(`Failed to transfer images: ${error.message || 'Unknown error'}`, {
-            icon: '❌',
-            duration: 5000,
-          });
         }
-      }
-    }, 1000); // 1 second delay to ensure auth state is updated
+      }, 1500); // Increased delay to ensure auth state is stable
 
-    return () => clearTimeout(transferTimer);
-  }
+      return () => {
+        clearTimeout(transferTimer);
+      };
+    }
 
-  // Update the ref with current user at the end of the effect
-  prevUserRef.current = user;
-}, [user, generatedLogo, pendingDownload]);
+    // Update the ref with current user at the end of the effect
+    prevUserRef.current = user;
+  }, [user, refetchUser, pendingDownload, generatedLogo]);
+
+  // Reset transfer attempt flag when user logs out
+  useEffect(() => {
+    if (!user) {
+      transferAttemptedRef.current = false;
+    }
+  }, [user]);
   
-const handleAuthSuccess = () => {
-    // This function is now much simpler.
-    // 1. Close the modal.
+  const handleAuthSuccess = () => {
+    console.log('=== AUTH SUCCESS CALLBACK ===');
     setShowAuthModal(false);
     
-    // 2. Set a flag indicating a transfer should begin.
-    // The useEffect above will be triggered once the `user` object is updated by the useAuth hook.
-    setIsTransferring(true);
-    toast.loading('Authentication successful! Transferring your logos...');
+    // Don't set transferring state here - let the useEffect handle it
+    console.log('Auth modal closed, waiting for useEffect to handle transfer...');
   };
-  
 
   const handleCategorySelect = (categoryId: string) => {
     setSelectedCategory(categoryId);
@@ -785,7 +811,7 @@ const handleAuthSuccess = () => {
         </div>
       </div>
       
-      {/* Make sure the AuthModal uses the new handleAuthSuccess function */}
+      {/* Auth Modal with enhanced success handling */}
       <AuthModal 
         isOpen={showAuthModal} 
         onClose={() => setShowAuthModal(false)}

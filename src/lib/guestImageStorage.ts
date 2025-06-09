@@ -63,7 +63,7 @@ export const saveGuestImageLocally = async (
  */
 export const transferGuestImagesToUserAccount = async (
   user: any, // Supabase user object
-  imagesToTransfer: GuestImageData[], // <-- ACCEPT THE LIST DIRECTLY
+  imagesToTransfer: GuestImageData[], // Accept the list directly
   uploadAndSaveLogo: (blob: Blob, prompt: string, category: string, userId: string, aspectRatio?: string) => Promise<{ success: boolean; error?: string }>
 ): Promise<{
   success: boolean;
@@ -79,7 +79,9 @@ export const transferGuestImagesToUserAccount = async (
   };
 
   try {
-    console.log(`[transferGuestImagesToUserAccount] Received ${imagesToTransfer.length} images to process.`);
+    console.log(`=== TRANSFER GUEST IMAGES TO USER ACCOUNT ===`);
+    console.log(`User ID: ${user.id}`);
+    console.log(`Images to transfer: ${imagesToTransfer.length}`);
 
     if (imagesToTransfer.length === 0) {
       console.log('No guest images provided to transfer.');
@@ -88,12 +90,12 @@ export const transferGuestImagesToUserAccount = async (
     }
 
     // Process each guest image from the provided list
-    for (const imageData of imagesToTransfer) {
-      const imageKey = imageData.id; // Use the id from the object
+    for (let i = 0; i < imagesToTransfer.length; i++) {
+      const imageData = imagesToTransfer[i];
+      const imageKey = imageData.id;
+      
       try {
-        console.log(`Processing guest image: ${imageKey}`);
-
-        // No need to get from DB, we already have imageData
+        console.log(`Processing image ${i + 1}/${imagesToTransfer.length}: ${imageKey}`);
 
         // Check if the image has expired (optional but good practice)
         if (Date.now() > imageData.expiresAt) {
@@ -104,7 +106,7 @@ export const transferGuestImagesToUserAccount = async (
           continue;
         }
 
-        console.log(`[Logo Migration] Attempting to migrate logo ${imageData.id} for user ${user.id}.`);
+        console.log(`Uploading logo to user account: ${imageData.prompt.substring(0, 50)}...`);
         const uploadResult = await uploadAndSaveLogo(
           imageData.blob,
           imageData.prompt,
@@ -114,29 +116,36 @@ export const transferGuestImagesToUserAccount = async (
         );
 
         if (uploadResult.success) {
-          console.log(`Successfully transferred image: ${imageKey}`);
+          console.log(`✓ Successfully transferred image: ${imageKey}`);
           result.transferredCount++;
+          
           // Delete the image from IndexedDB after successful transfer
           await del(imageKey);
-          console.log(`Cleaned up IndexedDB entry: ${imageKey}`);
+          console.log(`✓ Cleaned up IndexedDB entry: ${imageKey}`);
         } else {
-          console.error(`Failed to upload image ${imageKey}:`, uploadResult.error);
+          console.error(`✗ Failed to upload image ${imageKey}:`, uploadResult.error);
           result.failedCount++;
           result.errors.push(`Upload failed for ${imageKey}: ${uploadResult.error}`);
         }
 
       } catch (error: any) {
-        console.error(`Error processing image ${imageKey}:`, error);
+        console.error(`✗ Error processing image ${imageKey}:`, error);
         result.failedCount++;
         result.errors.push(`Processing error for ${imageKey}: ${error.message}`);
       }
     }
 
-    result.success = result.transferredCount > 0;
-    console.log(`Transfer completed: ${result.transferredCount} successful, ${result.failedCount} failed`);
+    result.success = result.transferredCount > 0 || result.failedCount === 0;
+    
+    console.log(`=== TRANSFER COMPLETED ===`);
+    console.log(`✓ Successful transfers: ${result.transferredCount}`);
+    console.log(`✗ Failed transfers: ${result.failedCount}`);
+    console.log(`Errors: ${result.errors.length}`);
+    
     return result;
 
   } catch (error: any) {
+    console.error('=== TRANSFER PROCESS ERROR ===');
     console.error('Error in transferGuestImagesToUserAccount:', error);
     result.errors.push(`Transfer process error: ${error.message}`);
     return result;
@@ -152,6 +161,8 @@ export const getGuestImages = async (): Promise<GuestImageData[]> => {
     const guestImageKeys = allKeys.filter(key => 
       typeof key === 'string' && key.startsWith('guest-image-')
     ) as string[];
+
+    console.log(`Found ${guestImageKeys.length} guest image keys in IndexedDB`);
 
     const images: GuestImageData[] = [];
     const now = Date.now();
@@ -175,6 +186,7 @@ export const getGuestImages = async (): Promise<GuestImageData[]> => {
       }
     }
 
+    console.log(`Returning ${images.length} valid guest images`);
     return images;
   } catch (error) {
     console.error('Error getting guest images:', error);

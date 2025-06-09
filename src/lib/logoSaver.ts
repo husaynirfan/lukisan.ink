@@ -44,48 +44,101 @@ export const blobToDataUrl = (blob: Blob): Promise<string> => {
 };
 
 /**
- * Saves a generated logo to Supabase Storage and database
- * This function handles the complete workflow of uploading an image and saving its metadata
+ * Enhanced logo saving with better error handling and debugging
  */
 export const handleSaveGeneratedLogo = async (params: SaveLogoParams): Promise<SaveLogoResult> => {
   const { imageBlob, prompt, category, userId, aspectRatio } = params;
 
   try {
-    console.log('Starting logo save process for user:', userId);
+    console.log('=== STARTING LOGO SAVE PROCESS ===');
+    console.log('User ID:', userId);
+    console.log('Blob size:', imageBlob.size, 'bytes');
+    console.log('Blob type:', imageBlob.type);
+    console.log('Category:', category);
+    console.log('Aspect ratio:', aspectRatio);
 
     // Step 1: Validate inputs
     if (!imageBlob || !prompt || !category || !userId) {
       throw new Error('Missing required parameters for saving logo');
     }
 
-    // Step 2: Create a unique file path for Supabase Storage
-    // Format: logos/{userId}/{timestamp}-{randomId}-{category}.png
+    if (imageBlob.size === 0) {
+      throw new Error('Image blob is empty');
+    }
+
+    if (imageBlob.size > 50 * 1024 * 1024) { // 50MB limit
+      throw new Error('Image file is too large (max 50MB)');
+    }
+
+    // Step 2: Verify user authentication
+    console.log('Step 1: Verifying user authentication...');
+    const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+    
+    if (sessionError) {
+      console.error('Session error:', sessionError);
+      throw new Error(`Authentication error: ${sessionError.message}`);
+    }
+    
+    if (!session?.user) {
+      throw new Error('User not authenticated - please sign in again');
+    }
+    
+    if (session.user.id !== userId) {
+      throw new Error('User ID mismatch - authentication issue');
+    }
+    
+    console.log('✓ User authenticated:', session.user.id);
+
+    // Step 3: Create a unique file path for Supabase Storage
+    console.log('Step 2: Generating file path...');
     const timestamp = Date.now();
     const randomId = Math.random().toString(36).substring(2, 15);
     const fileExtension = imageBlob.type.split('/')[1] || 'png';
     const fileName = `${timestamp}-${randomId}-${category}`;
     const filePath = `logos/${userId}/${fileName}.${fileExtension}`;
 
-    console.log('Generated file path:', filePath);
+    console.log('✓ Generated file path:', filePath);
 
-    // Step 3: Upload the image blob to Supabase Storage
-    console.log('Uploading image to Supabase Storage...');
+    // Step 4: Upload the image blob to Supabase Storage with enhanced error handling
+    console.log('Step 3: Uploading to Supabase Storage...');
+    
+    const uploadOptions = {
+      contentType: imageBlob.type || 'image/png',
+      cacheControl: '3600', // Cache for 1 hour
+      upsert: false // Don't overwrite if file exists
+    };
+    
+    console.log('Upload options:', uploadOptions);
+    
     const { data: uploadData, error: uploadError } = await supabase.storage
-      .from('generated-images') // Make sure this bucket exists in your Supabase project
-      .upload(filePath, imageBlob, {
-        contentType: imageBlob.type,
-        cacheControl: '3600', // Cache for 1 hour
-        upsert: false // Don't overwrite if file exists
-      });
+      .from('generated-images')
+      .upload(filePath, imageBlob, uploadOptions);
 
     if (uploadError) {
-      console.error('Upload error:', uploadError);
-      throw new Error(`Failed to upload image: ${uploadError.message}`);
+      console.error('✗ Upload error details:', {
+        message: uploadError.message,
+        statusCode: uploadError.statusCode,
+        error: uploadError
+      });
+      
+      // Provide more specific error messages
+      if (uploadError.message.includes('Bucket not found')) {
+        throw new Error('Storage bucket not found. Please contact support.');
+      } else if (uploadError.message.includes('not allowed') || uploadError.message.includes('permission')) {
+        throw new Error('Upload permission denied. Please try signing out and back in.');
+      } else if (uploadError.message.includes('size')) {
+        throw new Error('File too large. Please use a smaller image.');
+      } else if (uploadError.message.includes('type') || uploadError.message.includes('mime')) {
+        throw new Error('Invalid file type. Please use PNG, JPEG, or WebP images.');
+      } else {
+        throw new Error(`Upload failed: ${uploadError.message}`);
+      }
     }
 
-    console.log('Upload successful:', uploadData);
+    console.log('✓ Upload successful:', uploadData);
 
-    // Step 4: Get the permanent public URL for the uploaded image
+    // Step 5: Get the permanent public URL for the uploaded image
+    console.log('Step 4: Generating public URL...');
     const { data: urlData } = supabase.storage
       .from('generated-images')
       .getPublicUrl(filePath);
@@ -95,18 +148,35 @@ export const handleSaveGeneratedLogo = async (params: SaveLogoParams): Promise<S
     }
 
     const publicUrl = urlData.publicUrl;
-    console.log('Generated public URL:', publicUrl);
+    console.log('✓ Generated public URL:', publicUrl);
 
-    // Step 5: Save the logo metadata to the database with the permanent URL
-    console.log('Saving logo metadata to database...');
+    // Step 6: Verify the uploaded file is accessible
+    console.log('Step 5: Verifying file accessibility...');
+    try {
+      const verifyResponse = await fetch(publicUrl, { method: 'HEAD' });
+      if (!verifyResponse.ok) {
+        console.warn('⚠ File may not be immediately accessible:', verifyResponse.status);
+        // Don't fail the operation, just warn
+      } else {
+        console.log('✓ File is accessible via public URL');
+      }
+    } catch (verifyError) {
+      console.warn('⚠ Could not verify file accessibility:', verifyError);
+      // Don't fail the operation, just warn
+    }
+
+    // Step 7: Save the logo metadata to the database with the permanent URL
+    console.log('Step 6: Saving logo metadata to database...');
     const logoData = {
       user_id: userId,
       prompt: aspectRatio ? `${prompt} (${aspectRatio})` : prompt,
       category: category,
       image_url: publicUrl, // This is the permanent URL, not a blob URL
-      storage_path: filePath, // Store the path for easier file management
+      aspect_ratio: aspectRatio || '1:1',
       created_at: new Date().toISOString()
     };
+
+    console.log('Logo data to insert:', logoData);
 
     const { data: insertData, error: insertError } = await supabase
       .from('logo_generations')
@@ -115,20 +185,26 @@ export const handleSaveGeneratedLogo = async (params: SaveLogoParams): Promise<S
       .single();
 
     if (insertError) {
-      console.error('Database insertion error:', insertError);
+      console.error('✗ Database insertion error:', insertError);
       
       // If database save fails, clean up the uploaded file
       console.log('Cleaning up uploaded file due to database error...');
-      await supabase.storage
-        .from('generated-images')
-        .remove([filePath]);
+      try {
+        await supabase.storage
+          .from('generated-images')
+          .remove([filePath]);
+        console.log('✓ Cleanup successful');
+      } catch (cleanupError) {
+        console.error('✗ Cleanup failed:', cleanupError);
+      }
       
       throw new Error(`Failed to save logo to database: ${insertError.message}`);
     }
 
-    console.log('Logo saved successfully with ID:', insertData.id);
+    console.log('✓ Logo saved successfully with ID:', insertData.id);
+    console.log('=== LOGO SAVE PROCESS COMPLETED ===');
 
-    // Step 6: Return success result
+    // Step 8: Return success result
     return {
       success: true,
       logoId: insertData.id,
@@ -137,7 +213,8 @@ export const handleSaveGeneratedLogo = async (params: SaveLogoParams): Promise<S
     };
 
   } catch (error: any) {
-    console.error('Error in handleSaveGeneratedLogo:', error);
+    console.error('=== LOGO SAVE PROCESS FAILED ===');
+    console.error('Error details:', error);
     
     return {
       success: false,
@@ -148,16 +225,19 @@ export const handleSaveGeneratedLogo = async (params: SaveLogoParams): Promise<S
 
 /**
  * Helper function to convert a URL to a Blob
- * Use this if you have an image URL and need to convert it to a Blob for saving
- * Now supports data URLs as well as regular URLs
+ * Enhanced with better error handling and CORS support
  */
 export const urlToBlob = async (url: string): Promise<Blob> => {
   try {
+    console.log('Converting URL to blob:', url.substring(0, 100) + '...');
+    
     // Check if it's a data URL
     if (url.startsWith('data:')) {
+      console.log('Converting data URL to blob');
       return dataUrlToBlob(url);
     }
 
+    // For regular URLs, use fetch with proper headers
     const response = await fetch(url, {
       mode: 'cors',
       headers: {
@@ -166,42 +246,55 @@ export const urlToBlob = async (url: string): Promise<Blob> => {
     });
 
     if (!response.ok) {
-      throw new Error(`Failed to fetch image: ${response.statusText}`);
+      throw new Error(`Failed to fetch image: ${response.status} ${response.statusText}`);
     }
 
-    return await response.blob();
-  } catch (error) {
+    const blob = await response.blob();
+    console.log('✓ URL converted to blob, size:', blob.size, 'bytes');
+    
+    return blob;
+  } catch (error: any) {
     console.error('Error converting URL to blob:', error);
-    throw new Error('Failed to process image for saving');
+    throw new Error(`Failed to process image for saving: ${error.message}`);
   }
 };
 
 /**
  * Helper function to delete a logo from both storage and database
- * Use this for cleanup operations
+ * Enhanced with better error handling
  */
 export const deleteSavedLogo = async (logoId: string, storagePath: string): Promise<boolean> => {
   try {
-    // Delete from storage
+    console.log('=== DELETING SAVED LOGO ===');
+    console.log('Logo ID:', logoId);
+    console.log('Storage path:', storagePath);
+
+    // Delete from storage first
+    console.log('Deleting from storage...');
     const { error: storageError } = await supabase.storage
       .from('generated-images')
       .remove([storagePath]);
 
     if (storageError) {
-      console.warn('Failed to delete from storage:', storageError);
+      console.warn('⚠ Failed to delete from storage:', storageError);
+      // Continue with database deletion even if storage fails
+    } else {
+      console.log('✓ Deleted from storage');
     }
 
     // Delete from database
+    console.log('Deleting from database...');
     const { error: dbError } = await supabase
       .from('logo_generations')
       .delete()
       .eq('id', logoId);
 
     if (dbError) {
-      console.error('Failed to delete from database:', dbError);
+      console.error('✗ Failed to delete from database:', dbError);
       return false;
     }
 
+    console.log('✓ Logo deleted successfully');
     return true;
   } catch (error) {
     console.error('Error deleting saved logo:', error);

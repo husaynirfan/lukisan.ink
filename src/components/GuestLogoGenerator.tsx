@@ -198,7 +198,10 @@ export const GuestLogoGenerator: React.FC = () => {
     setGeneratedLogo(null);
     
     try {
-      console.log('Generating logo for guest user');
+      console.log('=== STARTING LOGO GENERATION ===');
+      console.log('User authenticated:', !!user);
+      console.log('Prompt:', prompt);
+      console.log('Category:', selectedCategory);
       
       const logoUrl = await generateLogo({
         prompt: prompt,
@@ -210,6 +213,8 @@ export const GuestLogoGenerator: React.FC = () => {
         seed: Math.floor(Math.random() * 2147483647)
       });
 
+      console.log('Logo generated successfully:', logoUrl);
+
       const newLogo: GeneratedLogo = {
         url: logoUrl,
         category: selectedCategory,
@@ -219,7 +224,9 @@ export const GuestLogoGenerator: React.FC = () => {
 
       // Store as temporary image for guest users
       if (!user) {
+        console.log('=== STORING GUEST IMAGE ===');
         console.log('Storing temporary image for guest user...');
+        
         const storeResult = await storeTempImage({
           imageUrl: logoUrl,
           prompt: prompt,
@@ -227,11 +234,19 @@ export const GuestLogoGenerator: React.FC = () => {
           aspectRatio: '1:1'
         });
 
+        console.log('Store result:', storeResult);
+
         if (storeResult.success && storeResult.tempImage) {
           newLogo.tempImageId = storeResult.tempImage.id;
-          console.log('Successfully stored temporary image:', storeResult.tempImage.id);
+          console.log('✓ Successfully stored temporary image:', storeResult.tempImage.id);
+          
+          // Verify the image was stored by checking IndexedDB
+          const storedImages = await getTempImages();
+          console.log('Verification - Total stored images:', storedImages.length);
+          console.log('Verification - Latest image:', storedImages[storedImages.length - 1]);
         } else {
-          console.warn('Failed to store temporary image:', storeResult.error);
+          console.error('✗ Failed to store temporary image:', storeResult.error);
+          toast.error('Failed to save image for later download');
         }
       }
 
@@ -248,6 +263,9 @@ export const GuestLogoGenerator: React.FC = () => {
 
   const handleDownload = async (logo: GeneratedLogo) => {
     if (!user) {
+      console.log('=== DOWNLOAD ATTEMPT BY GUEST ===');
+      console.log('Logo to download:', logo);
+      
       // Store the logo for download after sign-in
       setPendingDownload(logo);
       setShowAuthModal(true);
@@ -309,46 +327,59 @@ export const GuestLogoGenerator: React.FC = () => {
     }
   };
   
-  // Enhanced useEffect for transfer logic with better error handling
+  // Enhanced useEffect for transfer logic with comprehensive debugging
   useEffect(() => {
     const prevUser = prevUserRef.current;
 
     // Detect login: guest (no prevUser) to logged-in user (current user exists)
     if (!prevUser && user && !transferAttemptedRef.current) {
-      console.log('=== LOGIN DETECTED ===');
+      console.log('=== LOGIN DETECTED - STARTING TRANSFER PROCESS ===');
       console.log('Previous user:', prevUser);
-      console.log('Current user:', user.id);
+      console.log('Current user ID:', user.id);
       console.log('Transfer attempted before:', transferAttemptedRef.current);
       
       // Mark that we're attempting transfer to prevent multiple attempts
       transferAttemptedRef.current = true;
       
       setIsTransferring(true);
-      const loadingToast = toast.loading('Authentication successful! Transferring your logos...');
+      const loadingToast = toast.loading('Authentication successful! Checking for logos to transfer...');
 
-      // Add a small delay to ensure auth state is fully updated
+      // Add a delay to ensure auth state is fully updated
       const transferTimer = setTimeout(async () => {
         try {
-          console.log('Starting transfer process...');
+          console.log('=== STEP 1: CHECKING GUEST IMAGES ===');
           
           // First, let's check what guest images we have
           const guestImages = await getTempImages();
-          console.log('Found guest images:', guestImages.length);
+          console.log('Found guest images in IndexedDB:', guestImages.length);
+          
+          if (guestImages.length > 0) {
+            console.log('Guest images details:');
+            guestImages.forEach((img, index) => {
+              console.log(`  ${index + 1}. ID: ${img.id}, Prompt: ${img.prompt.substring(0, 50)}...`);
+            });
+          }
           
           if (guestImages.length === 0) {
-            console.log('No guest images to transfer');
+            console.log('No guest images found to transfer');
             toast.dismiss(loadingToast);
+            toast.info('No logos found to transfer');
             setIsTransferring(false);
             return;
           }
 
-          const transferResult = await transferTempImagesToUser(user.id);
-          console.log('Transfer result:', transferResult);
-          
+          console.log('=== STEP 2: STARTING TRANSFER ===');
           toast.dismiss(loadingToast);
+          const transferToast = toast.loading(`Transferring ${guestImages.length} logo(s) to your library...`);
+          
+          const transferResult = await transferTempImagesToUser(user.id);
+          console.log('=== TRANSFER RESULT ===', transferResult);
+          
+          toast.dismiss(transferToast);
           setIsTransferring(false);
 
           if (transferResult.insufficientCredits) {
+            console.log('Transfer failed: Insufficient credits');
             toast.error(`Not enough credits. Need ${transferResult.creditsNeeded}, have ${transferResult.creditsAvailable}`, {
               icon: '💳',
               duration: 5000,
@@ -357,6 +388,7 @@ export const GuestLogoGenerator: React.FC = () => {
               setGeneratedLogo(prev => prev ? { ...prev, hasInsufficientCredits: true } : null);
             }
           } else if (transferResult.success && transferResult.transferredCount > 0) {
+            console.log(`Transfer successful: ${transferResult.transferredCount} logos transferred`);
             toast.success(`Successfully transferred ${transferResult.transferredCount} logo(s) to your library!`, {
               icon: '✅',
               duration: 4000,
@@ -376,17 +408,14 @@ export const GuestLogoGenerator: React.FC = () => {
           } else if (transferResult.success && transferResult.transferredCount === 0) {
             console.log('Transfer completed but no images were transferred');
             toast.info('No new logos to transfer to your library');
+          } else {
+            console.log('Transfer failed:', transferResult.errors);
+            toast.error('Failed to transfer logos to your library');
           }
 
           // Log any errors
           if (transferResult.errors.length > 0) {
             console.error('Transfer errors:', transferResult.errors);
-            if (!transferResult.success) {
-              toast.error(`Transfer failed: ${transferResult.errors[0]}`, {
-                icon: '⚠️',
-                duration: 5000,
-              });
-            }
           }
           
         } catch (error: any) {
@@ -395,21 +424,12 @@ export const GuestLogoGenerator: React.FC = () => {
           setIsTransferring(false);
           toast.dismiss(loadingToast);
           
-          // Handle auth errors specifically
-          if (error.message && error.message.includes('Authentication')) {
-            console.log('Auth error detected, user may need to sign in again');
-            toast.error('Authentication expired. Please sign in again.', {
-              icon: '🔑',
-              duration: 5000,
-            });
-          } else {
-            toast.error(`Failed to transfer images: ${error.message || 'Unknown error'}`, {
-              icon: '❌',
-              duration: 5000,
-            });
-          }
+          toast.error(`Failed to transfer images: ${error.message || 'Unknown error'}`, {
+            icon: '❌',
+            duration: 5000,
+          });
         }
-      }, 1500); // Increased delay to ensure auth state is stable
+      }, 2000); // Increased delay to ensure auth state is stable
 
       return () => {
         clearTimeout(transferTimer);

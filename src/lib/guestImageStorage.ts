@@ -22,10 +22,17 @@ export const saveGuestImageLocally = async (
   aspectRatio: string = '1:1'
 ): Promise<{ success: boolean; imageId?: string; error?: string }> => {
   try {
+    console.log('=== SAVING GUEST IMAGE TO INDEXEDDB ===');
+    console.log('Image blob size:', imageBlob.size);
+    console.log('Prompt:', prompt.substring(0, 50) + '...');
+    console.log('Category:', category);
+    
     // Generate a unique key for this image
     const timestamp = Date.now();
     const randomId = Math.random().toString(36).substring(2, 15);
     const imageId = `guest-image-${timestamp}-${randomId}`;
+
+    console.log('Generated image ID:', imageId);
 
     // Create the image data object with the actual Blob
     const imageData: GuestImageData = {
@@ -38,10 +45,20 @@ export const saveGuestImageLocally = async (
       expiresAt: timestamp + (2 * 60 * 60 * 1000), // 2 hours from now
     };
 
+    console.log('Saving to IndexedDB with key:', imageId);
+    
     // Save to IndexedDB using idb-keyval
     await set(imageId, imageData);
 
-    console.log(`Successfully saved guest image to IndexedDB: ${imageId}`);
+    console.log(`✓ Successfully saved guest image to IndexedDB: ${imageId}`);
+    
+    // Verify the save by immediately retrieving it
+    const verification = await get(imageId);
+    if (verification) {
+      console.log('✓ Verification successful - image exists in IndexedDB');
+    } else {
+      console.error('✗ Verification failed - image not found in IndexedDB');
+    }
     
     return {
       success: true,
@@ -49,7 +66,7 @@ export const saveGuestImageLocally = async (
     };
 
   } catch (error: any) {
-    console.error('Error saving guest image to IndexedDB:', error);
+    console.error('✗ Error saving guest image to IndexedDB:', error);
     return {
       success: false,
       error: error.message || 'Failed to save image locally'
@@ -96,6 +113,9 @@ export const transferGuestImagesToUserAccount = async (
       
       try {
         console.log(`Processing image ${i + 1}/${imagesToTransfer.length}: ${imageKey}`);
+        console.log(`  Prompt: ${imageData.prompt.substring(0, 50)}...`);
+        console.log(`  Category: ${imageData.category}`);
+        console.log(`  Blob size: ${imageData.blob.size} bytes`);
 
         // Check if the image has expired (optional but good practice)
         if (Date.now() > imageData.expiresAt) {
@@ -157,29 +177,42 @@ export const transferGuestImagesToUserAccount = async (
  */
 export const getGuestImages = async (): Promise<GuestImageData[]> => {
   try {
+    console.log('=== GETTING GUEST IMAGES FROM INDEXEDDB ===');
+    
     const allKeys = await keys();
+    console.log('Total keys in IndexedDB:', allKeys.length);
+    
     const guestImageKeys = allKeys.filter(key => 
       typeof key === 'string' && key.startsWith('guest-image-')
     ) as string[];
 
-    console.log(`Found ${guestImageKeys.length} guest image keys in IndexedDB`);
+    console.log(`Found ${guestImageKeys.length} guest image keys in IndexedDB:`, guestImageKeys);
 
     const images: GuestImageData[] = [];
     const now = Date.now();
 
     for (const key of guestImageKeys) {
       try {
+        console.log(`Retrieving image data for key: ${key}`);
         const imageData: GuestImageData | undefined = await get(key);
         
         if (imageData) {
+          console.log(`  ✓ Found image: ${imageData.prompt.substring(0, 30)}...`);
+          console.log(`  ✓ Blob size: ${imageData.blob.size} bytes`);
+          console.log(`  ✓ Created: ${new Date(imageData.createdAt).toLocaleString()}`);
+          console.log(`  ✓ Expires: ${new Date(imageData.expiresAt).toLocaleString()}`);
+          
           // Check if expired
           if (now > imageData.expiresAt) {
+            console.log(`  ✗ Image expired, deleting: ${key}`);
             // Delete expired image
             await del(key);
-            console.log(`Deleted expired guest image: ${key}`);
           } else {
+            console.log(`  ✓ Image valid, adding to results`);
             images.push(imageData);
           }
+        } else {
+          console.log(`  ✗ No data found for key: ${key}`);
         }
       } catch (error) {
         console.error(`Error retrieving guest image ${key}:`, error);
@@ -206,16 +239,21 @@ export const createGuestImageDisplayUrl = (imageData: GuestImageData): string =>
  */
 export const cleanupAllGuestImages = async (): Promise<void> => {
   try {
+    console.log('=== CLEANING UP ALL GUEST IMAGES ===');
+    
     const allKeys = await keys();
     const guestImageKeys = allKeys.filter(key => 
       typeof key === 'string' && key.startsWith('guest-image-')
     ) as string[];
 
+    console.log(`Found ${guestImageKeys.length} guest images to clean up`);
+
     for (const key of guestImageKeys) {
       await del(key);
+      console.log(`Deleted: ${key}`);
     }
 
-    console.log(`Cleaned up ${guestImageKeys.length} guest images from IndexedDB`);
+    console.log(`✓ Cleaned up ${guestImageKeys.length} guest images from IndexedDB`);
   } catch (error) {
     console.error('Error cleaning up guest images:', error);
   }
@@ -226,6 +264,8 @@ export const cleanupAllGuestImages = async (): Promise<void> => {
  */
 export const cleanupExpiredGuestImages = async (): Promise<void> => {
   try {
+    console.log('=== CLEANING UP EXPIRED GUEST IMAGES ===');
+    
     const allKeys = await keys();
     const guestImageKeys = allKeys.filter(key => 
       typeof key === 'string' && key.startsWith('guest-image-')
@@ -241,6 +281,7 @@ export const cleanupExpiredGuestImages = async (): Promise<void> => {
         if (imageData && now > imageData.expiresAt) {
           await del(key);
           cleanedCount++;
+          console.log(`Cleaned up expired image: ${key}`);
         }
       } catch (error) {
         console.error(`Error checking expiration for ${key}:`, error);
@@ -248,7 +289,9 @@ export const cleanupExpiredGuestImages = async (): Promise<void> => {
     }
 
     if (cleanedCount > 0) {
-      console.log(`Cleaned up ${cleanedCount} expired guest images`);
+      console.log(`✓ Cleaned up ${cleanedCount} expired guest images`);
+    } else {
+      console.log('No expired guest images found');
     }
   } catch (error) {
     console.error('Error cleaning up expired guest images:', error);

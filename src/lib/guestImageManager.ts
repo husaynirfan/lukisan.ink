@@ -83,8 +83,13 @@ export const storeTempImage = async (params: {
   aspectRatio: string;
 }): Promise<{ success: boolean; tempImage?: TempImage; error?: string }> => {
   try {
+    console.log('=== STORE TEMP IMAGE ===');
+    console.log('Image URL:', params.imageUrl);
+    console.log('Prompt:', params.prompt.substring(0, 50) + '...');
+    
     const guestSession = getOrCreateGuestSession();
-    console.log('storeTempImage - guest_session_id:', guestSession.sessionId);
+    console.log('Guest session ID:', guestSession.sessionId);
+    
     console.log('Converting image URL to blob for storage...');
     
     // Convert the image URL to a Blob
@@ -126,7 +131,7 @@ export const storeTempImage = async (params: {
     };
     
     console.log('Successfully stored guest image:', saveResult.imageId);
-    console.log('storeTempImage - tempImage:', tempImage);
+    console.log('Temp image object created:', tempImage);
     
     return { success: true, tempImage };
   } catch (error: any) {
@@ -140,6 +145,8 @@ export const storeTempImage = async (params: {
  */
 export const getTempImages = async (sessionId?: string): Promise<TempImage[]> => {
   try {
+    console.log('=== GET TEMP IMAGES ===');
+    
     const guestImages = await getGuestImages();
     console.log('getTempImages - found guest images:', guestImages.length);
     
@@ -173,6 +180,9 @@ export const checkUserCredits = async (userId: string): Promise<{
   canGenerate: boolean;
 }> => {
   try {
+    console.log('=== CHECKING USER CREDITS ===');
+    console.log('User ID:', userId);
+    
     const { data: user, error } = await supabase
       .from('users')
       .select('tier, credits_remaining, daily_generations, last_generation_date')
@@ -180,17 +190,22 @@ export const checkUserCredits = async (userId: string): Promise<{
       .single();
 
     if (error) {
+      console.error('Error fetching user credits:', error);
       throw new Error(`Failed to fetch user credits: ${error.message}`);
     }
+
+    console.log('User data:', user);
 
     const isProUser = user.tier === 'pro';
     
     if (isProUser) {
-      return {
+      const result = {
         available: user.credits_remaining,
         isProUser: true,
         canGenerate: user.credits_remaining > 0
       };
+      console.log('Pro user credits:', result);
+      return result;
     } else {
       // Free user logic
       const today = new Date().toISOString().split('T')[0];
@@ -199,11 +214,13 @@ export const checkUserCredits = async (userId: string): Promise<{
       const dailyUsed = lastGenDate === today ? user.daily_generations : 0;
       const available = Math.max(0, 3 - dailyUsed);
       
-      return {
+      const result = {
         available,
         isProUser: false,
         canGenerate: available > 0
       };
+      console.log('Free user credits:', result);
+      return result;
     }
   } catch (error: any) {
     console.error('Error checking user credits:', error);
@@ -374,6 +391,11 @@ export const transferTempImagesToUser = async (userId: string): Promise<Transfer
  */
 const deductUserCredits = async (userId: string, count: number, isProUser: boolean): Promise<void> => {
   try {
+    console.log('=== DEDUCTING USER CREDITS ===');
+    console.log('User ID:', userId);
+    console.log('Credits to deduct:', count);
+    console.log('Is pro user:', isProUser);
+    
     if (isProUser) {
       // Deduct from credits_remaining
       const { error } = await supabase
@@ -387,6 +409,7 @@ const deductUserCredits = async (userId: string, count: number, isProUser: boole
       if (error) {
         throw new Error(`Failed to deduct pro credits: ${error.message}`);
       }
+      console.log(`✓ Deducted ${count} pro credits`);
     } else {
       // Update daily generations
       const today = new Date().toISOString();
@@ -418,6 +441,7 @@ const deductUserCredits = async (userId: string, count: number, isProUser: boole
       if (updateError) {
         throw new Error(`Failed to update daily generations: ${updateError.message}`);
       }
+      console.log(`✓ Updated daily generations: ${newDailyCount}`);
     }
 
     console.log(`Successfully deducted ${count} credits for user ${userId}`);

@@ -96,6 +96,7 @@ export const GuestLogoGenerator: React.FC = () => {
   // Initialize the ref to track previous user state
   const prevUserRef = useRef(user);
   const transferAttemptedRef = useRef(false);
+  const transferInProgressRef = useRef(false);
 
   // Get the selected category's placeholder
   const selectedCategoryData = categories.find(cat => cat.id === selectedCategory);
@@ -332,19 +333,20 @@ export const GuestLogoGenerator: React.FC = () => {
     const prevUser = prevUserRef.current;
 
     // Detect login: guest (no prevUser) to logged-in user (current user exists)
-    if (!prevUser && user && !transferAttemptedRef.current) {
+    if (!prevUser && user && !transferAttemptedRef.current && !transferInProgressRef.current) {
       console.log('=== LOGIN DETECTED - STARTING TRANSFER PROCESS ===');
       console.log('Previous user:', prevUser);
       console.log('Current user ID:', user.id);
       console.log('Transfer attempted before:', transferAttemptedRef.current);
+      console.log('Transfer in progress:', transferInProgressRef.current);
       
       // Mark that we're attempting transfer to prevent multiple attempts
       transferAttemptedRef.current = true;
+      transferInProgressRef.current = true;
       
       setIsTransferring(true);
-      const loadingToast = toast.loading('Authentication successful! Checking for logos to transfer...');
 
-      // Add a delay to ensure auth state is fully updated
+      // Longer delay to ensure everything is stable
       const transferTimer = setTimeout(async () => {
         try {
           console.log('=== STEP 1: CHECKING GUEST IMAGES ===');
@@ -362,14 +364,13 @@ export const GuestLogoGenerator: React.FC = () => {
           
           if (guestImages.length === 0) {
             console.log('No guest images found to transfer');
-            toast.dismiss(loadingToast);
             toast.info('No logos found to transfer');
             setIsTransferring(false);
+            transferInProgressRef.current = false;
             return;
           }
 
           console.log('=== STEP 2: STARTING TRANSFER ===');
-          toast.dismiss(loadingToast);
           const transferToast = toast.loading(`Transferring ${guestImages.length} logo(s) to your library...`);
           
           const transferResult = await transferTempImagesToUser(user.id);
@@ -377,6 +378,7 @@ export const GuestLogoGenerator: React.FC = () => {
           
           toast.dismiss(transferToast);
           setIsTransferring(false);
+          transferInProgressRef.current = false;
 
           if (transferResult.insufficientCredits) {
             console.log('Transfer failed: Insufficient credits');
@@ -422,14 +424,14 @@ export const GuestLogoGenerator: React.FC = () => {
           console.error('=== TRANSFER ERROR ===');
           console.error('Error during image transfer:', error);
           setIsTransferring(false);
-          toast.dismiss(loadingToast);
+          transferInProgressRef.current = false;
           
           toast.error(`Failed to transfer images: ${error.message || 'Unknown error'}`, {
             icon: '❌',
             duration: 5000,
           });
         }
-      }, 2000); // Increased delay to ensure auth state is stable
+      }, 3000); // Increased delay to 3 seconds to ensure auth state is completely stable
 
       return () => {
         clearTimeout(transferTimer);
@@ -444,6 +446,7 @@ export const GuestLogoGenerator: React.FC = () => {
   useEffect(() => {
     if (!user) {
       transferAttemptedRef.current = false;
+      transferInProgressRef.current = false;
     }
   }, [user]);
   

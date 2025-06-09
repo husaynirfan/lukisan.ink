@@ -1,13 +1,14 @@
 import React, { useState } from 'react';
 import { motion } from 'framer-motion';
-import { Sparkles, Images, Crown, Video } from 'lucide-react';
+import { Sparkles, Images, Crown, Video, Database } from 'lucide-react';
 import { LogoGenerator } from '../components/LogoGenerator';
 import { ImageLibrary } from '../components/ImageLibrary';
 import { VideoGenerator } from '../components/video/VideoGenerator';
+import { StorageDiagnostics } from '../components/StorageDiagnostics';
 import { SubscriptionCard } from '../components/SubscriptionCard';
 import { useAuth } from '../hooks/useAuth';
 
-type DashboardTab = 'generate' | 'library' | 'video';
+type DashboardTab = 'generate' | 'library' | 'video' | 'diagnostics';
 
 export const Dashboard: React.FC = () => {
   const { user, getUserTier } = useAuth();
@@ -55,6 +56,13 @@ export const Dashboard: React.FC = () => {
       name: 'Library',
       icon: Images,
       description: 'View and manage your generated content',
+    },
+    {
+      id: 'diagnostics' as DashboardTab,
+      name: 'Diagnostics',
+      icon: Database,
+      description: 'Test storage and upload functionality',
+      devOnly: true,
     },
   ];
 
@@ -130,7 +138,13 @@ export const Dashboard: React.FC = () => {
               {tabs.map((tab) => {
                 const IconComponent = tab.icon;
                 const isActive = activeTab === tab.id;
-                const isDisabled = tab.proOnly && !isProUser && !debugAllowVideoTabForFree;
+                const isDisabled = (tab.proOnly && !isProUser && !debugAllowVideoTabForFree) || 
+                                 (tab.devOnly && process.env.NODE_ENV !== 'development');
+                
+                // Hide dev-only tabs in production
+                if (tab.devOnly && process.env.NODE_ENV !== 'development') {
+                  return null;
+                }
                 
                 return (
                   <motion.button
@@ -155,6 +169,11 @@ export const Dashboard: React.FC = () => {
                     {tab.proOnly && !isProUser && debugAllowVideoTabForFree && (
                       <div className="absolute -top-1 -right-1 w-3 h-3 bg-purple-500 rounded-full flex items-center justify-center">
                         <span className="text-xs text-white">🔓</span>
+                      </div>
+                    )}
+                    {tab.devOnly && (
+                      <div className="absolute -top-1 -right-1 w-3 h-3 bg-blue-500 rounded-full flex items-center justify-center">
+                        <span className="text-xs text-white">🔧</span>
                       </div>
                     )}
                   </motion.button>
@@ -183,6 +202,8 @@ export const Dashboard: React.FC = () => {
           {activeTab === 'video' && <VideoGenerator />}
           
           {activeTab === 'library' && <ImageLibrary />}
+          
+          {activeTab === 'diagnostics' && <StorageDiagnostics />}
         </motion.div>
       </div>
     </div>

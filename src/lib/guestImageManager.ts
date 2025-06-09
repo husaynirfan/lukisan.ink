@@ -295,7 +295,7 @@ export const transferTempImagesToUser = async (userId: string): Promise<Transfer
     }
 
     console.log('Step 4: Setting up upload function');
-    // Upload and save function
+    // Enhanced upload and save function using the existing handleSaveGeneratedLogo
     const uploadAndSaveLogo = async (
       blob: Blob, 
       prompt: string, 
@@ -304,50 +304,32 @@ export const transferTempImagesToUser = async (userId: string): Promise<Transfer
       aspectRatio?: string
     ) => {
       try {
-        console.log(`Uploading logo: ${prompt.substring(0, 50)}...`);
+        console.log(`=== UPLOADING LOGO ===`);
+        console.log(`Prompt: ${prompt.substring(0, 50)}...`);
+        console.log(`Category: ${category}`);
+        console.log(`Aspect Ratio: ${aspectRatio}`);
+        console.log(`Blob size: ${blob.size} bytes`);
         
-        const fileName = `logo-${Date.now()}.png`;
-        const filePath = `logos/${userId}/${fileName}`;
-        
-        // Upload to storage
-        const { error: uploadError } = await supabase.storage
-          .from('generated-images') 
-          .upload(filePath, blob, {
-            cacheControl: '3600',
-            upsert: true,
-            contentType: 'image/png'
-          });
+        // Use the existing handleSaveGeneratedLogo function which handles everything
+        const saveResult = await handleSaveGeneratedLogo({
+          imageBlob: blob,
+          prompt: prompt,
+          category: category,
+          userId: userId,
+          aspectRatio: aspectRatio || '1:1'
+        });
 
-        if (uploadError) {
-          console.error('Error uploading logo:', uploadError);
-          return { success: false, error: uploadError.message };
+        if (saveResult.success) {
+          console.log('✓ Successfully uploaded and saved logo');
+          console.log('✓ Public URL:', saveResult.publicUrl);
+          console.log('✓ Storage Path:', saveResult.storagePath);
+          return { success: true };
+        } else {
+          console.error('✗ Failed to save logo:', saveResult.error);
+          return { success: false, error: saveResult.error };
         }
-
-        // Get public URL from the correct bucket
-        const { data: { publicUrl } } = supabase.storage
-          .from('generated-images')
-          .getPublicUrl(filePath);
-
-        // Save to database
-        const { error: dbError } = await supabase
-          .from('logo_generations') 
-          .insert([{
-            user_id: userId,
-            prompt,
-            category,
-            image_url: publicUrl,
-            aspect_ratio: aspectRatio || '1:1'
-          }]);
-
-        if (dbError) {
-          console.error('Error saving logo to database:', dbError);
-          return { success: false, error: dbError.message };
-        }
-
-        console.log('Successfully uploaded and saved logo');
-        return { success: true };
       } catch (error: any) {
-        console.error('Error in uploadAndSaveLogo:', error);
+        console.error('✗ Error in uploadAndSaveLogo:', error);
         return { success: false, error: error.message };
       }
     };

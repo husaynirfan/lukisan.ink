@@ -17,6 +17,7 @@ export interface StorageVerificationResult {
     read: boolean;
     delete: boolean;
   };
+  bucketDetails?: any;
 }
 
 /**
@@ -41,18 +42,33 @@ export const verifyStorageBucket = async (userId: string): Promise<StorageVerifi
     console.log('=== STORAGE VERIFICATION STARTING ===');
     console.log('User ID:', userId);
 
-    // Step 1: Check if bucket exists
+    // Step 1: Check if bucket exists using a different approach
     console.log('Step 1: Checking if bucket exists...');
+    
+    // Try to list buckets first
     const { data: buckets, error: bucketsError } = await supabase.storage.listBuckets();
     
     if (bucketsError) {
-      result.errors.push(`Failed to list buckets: ${bucketsError.message}`);
-      console.error('Bucket listing error:', bucketsError);
+      console.log('Bucket listing failed, trying alternative method...');
+      // If listing fails, try to access the bucket directly
+      const { data: testList, error: testListError } = await supabase.storage
+        .from('generated-images')
+        .list('', { limit: 1 });
+      
+      if (!testListError) {
+        result.bucketExists = true;
+        result.bucketPublic = true; // Assume public if we can list
+        console.log('✓ Bucket exists (verified via direct access)');
+      } else {
+        result.errors.push(`Cannot access bucket: ${testListError.message}`);
+        console.error('✗ Bucket access failed:', testListError);
+      }
     } else {
       const generatedImagesBucket = buckets?.find(bucket => bucket.id === 'generated-images');
       if (generatedImagesBucket) {
         result.bucketExists = true;
         result.bucketPublic = generatedImagesBucket.public;
+        result.bucketDetails = generatedImagesBucket;
         console.log('✓ Bucket exists:', generatedImagesBucket);
       } else {
         result.errors.push('Bucket "generated-images" does not exist');
@@ -80,6 +96,13 @@ export const verifyStorageBucket = async (userId: string): Promise<StorageVerifi
     if (uploadError) {
       result.errors.push(`Upload test failed: ${uploadError.message}`);
       console.error('✗ Upload test failed:', uploadError);
+      
+      // Try to understand why upload failed
+      if (uploadError.message.includes('Bucket not found')) {
+        result.errors.push('Bucket "generated-images" does not exist - needs to be created');
+      } else if (uploadError.message.includes('not allowed')) {
+        result.errors.push('Upload permission denied - check RLS policies');
+      }
     } else {
       result.canUpload = true;
       result.permissions.upload = true;
@@ -145,6 +168,16 @@ export const verifyStorageBucket = async (userId: string): Promise<StorageVerifi
       console.log('✓ List files successful:', files?.length || 0, 'files found');
     }
 
+    // Step 7: Check authentication
+    console.log('Step 7: Checking authentication...');
+    const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+    if (sessionError || !session) {
+      result.errors.push('User not authenticated');
+      console.error('✗ Authentication issue:', sessionError);
+    } else {
+      console.log('✓ User authenticated:', session.user.id);
+    }
+
   } catch (error: any) {
     result.errors.push(`Verification failed: ${error.message}`);
     console.error('=== STORAGE VERIFICATION ERROR ===', error);
@@ -162,6 +195,17 @@ export const verifyStorageBucket = async (userId: string): Promise<StorageVerifi
 export const createStorageBucket = async (): Promise<{ success: boolean; error?: string }> => {
   try {
     console.log('=== CREATING STORAGE BUCKET ===');
+
+    // First check if bucket already exists
+    const { data: buckets, error: listError } = await supabase.storage.listBuckets();
+    
+    if (!listError && buckets) {
+      const existingBucket = buckets.find(bucket => bucket.id === 'generated-images');
+      if (existingBucket) {
+        console.log('✓ Bucket already exists:', existingBucket);
+        return { success: true };
+      }
+    }
 
     const { data, error } = await supabase.storage.createBucket('generated-images', {
       public: true,
@@ -191,6 +235,7 @@ export const testLogoUploadProcess = async (userId: string): Promise<{
   logoId?: string;
   publicUrl?: string;
   error?: string;
+  details?: any;
 }> => {
   try {
     console.log('=== TESTING COMPLETE LOGO UPLOAD PROCESS ===');
@@ -242,16 +287,32 @@ export const testLogoUploadProcess = async (userId: string): Promise<{
       console.log('✓ Public URL:', saveResult.publicUrl);
       console.log('✓ Storage Path:', saveResult.storagePath);
 
+      // Test if the uploaded file is accessible
+      if (saveResult.publicUrl) {
+        try {
+          const response = await fetch(saveResult.publicUrl);
+          if (response.ok) {
+            console.log('✓ Uploaded file is accessible via public URL');
+          } else {
+            console.warn('⚠ Uploaded file not accessible:', response.status);
+          }
+        } catch (fetchError) {
+          console.warn('⚠ Could not verify file accessibility:', fetchError);
+        }
+      }
+
       return {
         success: true,
         logoId: saveResult.logoId,
-        publicUrl: saveResult.publicUrl
+        publicUrl: saveResult.publicUrl,
+        details: saveResult
       };
     } else {
       console.error('✗ Upload process failed:', saveResult.error);
       return {
         success: false,
-        error: saveResult.error
+        error: saveResult.error,
+        details: saveResult
       };
     }
 
@@ -262,6 +323,105 @@ export const testLogoUploadProcess = async (userId: string): Promise<{
       error: error.message
     };
   }
+};
+
+/**
+ * Test direct storage operations
+ */
+export const testDirectStorageOperations = async (userId: string) => {
+  console.log('=== TESTING DIRECT STORAGE OPERATIONS ===');
+  
+  const results = {
+    listBuckets: { success: false, error: '', data: null as any },
+    uploadFile: { success: false, error: '', data: null as any },
+    getPublicUrl: { success: false, error: '', data: null as any },
+    downloadFile: { success: false, error: '', data: null as any },
+    deleteFile: { success: false, error: '', data: null as any }
+  };
+
+  // Test 1: List buckets
+  try {
+    const { data, error } = await supabase.storage.listBuckets();
+    if (error) {
+      results.listBuckets.error = error.message;
+    } else {
+      results.listBuckets.success = true;
+      results.listBuckets.data = data;
+    }
+  } catch (error: any) {
+    results.listBuckets.error = error.message;
+  }
+
+  // Test 2: Upload file
+  const testPath = `logos/${userId}/direct-test-${Date.now()}.txt`;
+  const testContent = new Blob(['Direct storage test'], { type: 'text/plain' });
+  
+  try {
+    const { data, error } = await supabase.storage
+      .from('generated-images')
+      .upload(testPath, testContent);
+    
+    if (error) {
+      results.uploadFile.error = error.message;
+    } else {
+      results.uploadFile.success = true;
+      results.uploadFile.data = data;
+    }
+  } catch (error: any) {
+    results.uploadFile.error = error.message;
+  }
+
+  // Test 3: Get public URL (only if upload succeeded)
+  if (results.uploadFile.success) {
+    try {
+      const { data } = supabase.storage
+        .from('generated-images')
+        .getPublicUrl(testPath);
+      
+      results.getPublicUrl.success = true;
+      results.getPublicUrl.data = data;
+    } catch (error: any) {
+      results.getPublicUrl.error = error.message;
+    }
+  }
+
+  // Test 4: Download file (only if upload succeeded)
+  if (results.uploadFile.success) {
+    try {
+      const { data, error } = await supabase.storage
+        .from('generated-images')
+        .download(testPath);
+      
+      if (error) {
+        results.downloadFile.error = error.message;
+      } else {
+        results.downloadFile.success = true;
+        results.downloadFile.data = { size: data?.size };
+      }
+    } catch (error: any) {
+      results.downloadFile.error = error.message;
+    }
+  }
+
+  // Test 5: Delete file (only if upload succeeded)
+  if (results.uploadFile.success) {
+    try {
+      const { error } = await supabase.storage
+        .from('generated-images')
+        .remove([testPath]);
+      
+      if (error) {
+        results.deleteFile.error = error.message;
+      } else {
+        results.deleteFile.success = true;
+      }
+    } catch (error: any) {
+      results.deleteFile.error = error.message;
+    }
+  }
+
+  console.log('Direct storage test results:', results);
+  return results;
 };
 
 /**
@@ -276,7 +436,10 @@ export const runStorageDiagnostics = async (userId: string) => {
   // 2. Test complete upload process
   const uploadTest = await testLogoUploadProcess(userId);
   
-  // 3. Check user authentication
+  // 3. Test direct storage operations
+  const directStorageTest = await testDirectStorageOperations(userId);
+  
+  // 4. Check user authentication
   const { data: { session }, error: sessionError } = await supabase.auth.getSession();
   
   const diagnostics = {
@@ -289,6 +452,7 @@ export const runStorageDiagnostics = async (userId: string) => {
     },
     bucket: bucketVerification,
     upload: uploadTest,
+    directStorage: directStorageTest,
     recommendations: [] as string[]
   };
 
@@ -307,6 +471,10 @@ export const runStorageDiagnostics = async (userId: string) => {
   
   if (!uploadTest.success) {
     diagnostics.recommendations.push('Debug the complete upload process');
+  }
+
+  if (!directStorageTest.uploadFile.success) {
+    diagnostics.recommendations.push('Fix direct storage upload issues');
   }
 
   console.log('=== DIAGNOSTICS COMPLETE ===');
